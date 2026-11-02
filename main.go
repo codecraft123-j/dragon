@@ -32,7 +32,7 @@ const banner = red + `
  / / / / /_/ / /| | / / __/ / / /  |/ /
 / /_/ / _, _/ ___ |/ /_/ / /_/ / /|  /
 \____/_/ |_/_/  |_|\____/\____/_/ |_/
-` + yellow + `      [ DRAGON SCANNER v2.0 (Go) - BY LAFTMAN ]` + reset + "\n"
+` + yellow + `      [ DRAGON SCANNER v1.0.0 (Go) - BY LAFTMAN ]` + reset + "\n"
 
 // ---------- helpers ----------
 
