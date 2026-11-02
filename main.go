@@ -23,16 +23,28 @@ const (
 	blue   = "\033[1;34m"
 	green  = "\033[1;32m"
 	yellow = "\033[1;33m"
+	gray   = "\033[0;90m"
 	reset  = "\033[0m"
 )
 
-const banner = red + `
-   ____  ____  ___    ____________  _   __
-  / __ \/ __ \/   |  / ____/ __ \/ | / /
- / / / / /_/ / /| | / / __/ / / /  |/ /
-/ /_/ / _, _/ ___ |/ /_/ / /_/ / /|  /
-\____/_/ |_/_/  |_|\____/\____/_/ |_/
-` + yellow + `      [ DRAGON SCANNER v1.0.0 (Go) - BY LAFTMAN ]` + reset + "\n"
+// printBanner desenha o banner com degradê de fogo (vermelho → amarelo).
+func printBanner() {
+	art := []string{
+		`   ____  ____  ___    ____________  _   __`,
+		`  / __ \/ __ \/   |  / ____/ __ \/ | / /`,
+		` / / / / /_/ / /| | / / __/ / / /  |/ /`,
+		`/ /_/ / _, _/ ___ |/ /_/ / /_/ / /|  /`,
+		`\____/_/ |_/_/  |_|\____/\____/_/ |_/`,
+	}
+	fire := []int{196, 202, 208, 214, 220}
+	fmt.Fprintln(os.Stderr)
+	for i, line := range art {
+		fmt.Fprintf(os.Stderr, "\033[1;38;5;%dm%s%s\n", fire[i], line, reset)
+	}
+	fmt.Fprintf(os.Stderr, "\033[1;38;5;51m   ⚡ Passive Subdomain Hunter %s•\033[1;38;5;51m v1.1.1 %s•\033[1;38;5;51m by laftman%s\n\n", gray, gray, reset)
+}
+
+var verbose bool
 
 // ---------- helpers ----------
 
@@ -85,12 +97,15 @@ func runCmd(ctx context.Context, name string, args ...string) ([]string, error) 
 	return splitLines(string(out)), nil
 }
 
-func httpGet(ctx context.Context, c *http.Client, u string) (io.ReadCloser, error) {
+func open(ctx context.Context, c *http.Client, u string, headers map[string]string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) dragon/2.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) dragon/1.1")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
@@ -102,44 +117,159 @@ func httpGet(ctx context.Context, c *http.Client, u string) (io.ReadCloser, erro
 	return resp.Body, nil
 }
 
+func fetch(ctx context.Context, c *http.Client, u string, headers map[string]string) ([]byte, error) {
+	body, err := open(ctx, c, u, headers)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+	return io.ReadAll(io.LimitReader(body, 200<<20))
+}
+
+func fetchJSON(ctx context.Context, c *http.Client, u string, headers map[string]string, v any) error {
+	b, err := fetch(ctx, c, u, headers)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
+}
+
 // ---------- fontes ----------
 
 type source struct {
 	name string
-	fn   func(ctx context.Context, c *http.Client, target string) ([]string, error)
+	env  string // variável de ambiente com a chave de API opcional (vazio = não usa chave)
+	fn   func(ctx context.Context, c *http.Client, key, target string) ([]string, error)
 }
 
-var sources = []source{
-	{"Subfinder", func(ctx context.Context, _ *http.Client, t string) ([]string, error) {
-		return runCmd(ctx, "subfinder", "-d", t, "-silent")
-	}},
-	{"AlienVault OTX", func(ctx context.Context, c *http.Client, t string) ([]string, error) {
-		body, err := httpGet(ctx, c, fmt.Sprintf("https://otx.alienvault.com/api/v1/indicators/domain/%s/url_list?limit=500", t))
+// scrapeSource cria uma fonte que baixa uma página e extrai hosts por regex.
+func scrapeSource(name, format string) source {
+	return source{name: name, fn: func(ctx context.Context, c *http.Client, _, t string) ([]string, error) {
+		b, err := fetch(ctx, c, fmt.Sprintf(format, t), nil)
 		if err != nil {
 			return nil, err
 		}
-		defer body.Close()
-		var r struct {
+		re := regexp.MustCompile(`[a-zA-Z0-9._-]+\.` + regexp.QuoteMeta(t))
+		return re.FindAllString(string(b), -1), nil
+	}}
+}
+
+var sources = []source{
+	// ===== ferramentas externas (opcionais) =====
+	{name: "Subfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
+		return runCmd(ctx, "subfinder", "-d", t, "-silent")
+	}},
+	{name: "Assetfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
+		return runCmd(ctx, "assetfinder", "--subs-only", t)
+	}},
+
+	// ===== gratuitas: Certificate Transparency =====
+	{name: "crt.sh", fn: func(ctx context.Context, c *http.Client, _, t string) ([]string, error) {
+		var rows []struct {
+			NameValue string `json:"name_value"`
+		}
+		if err := fetchJSON(ctx, c, "https://crt.sh/?q=%25."+t+"&output=json", nil, &rows); err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, r := range rows {
+			out = append(out, splitLines(r.NameValue)...)
+		}
+		return out, nil
+	}},
+	{name: "CertSpotter", env: "CERTSPOTTER_API_KEY", fn: func(ctx context.Context, c *http.Client, key, t string) ([]string, error) {
+		headers := map[string]string{}
+		if key != "" {
+			headers["Authorization"] = "Bearer " + key
+		}
+		base := fmt.Sprintf("https://api.certspotter.com/v1/issuances?domain=%s&include_subdomains=true&expand=dns_names", t)
+		var out []string
+		after := ""
+		for page := 0; page < 5; page++ {
+			u := base
+			if after != "" {
+				u += "&after=" + after
+			}
+			var rows []struct {
+				ID       string   `json:"id"`
+				DNSNames []string `json:"dns_names"`
+			}
+			if err := fetchJSON(ctx, c, u, headers, &rows); err != nil {
+				return out, err
+			}
+			if len(rows) == 0 {
+				break
+			}
+			for _, r := range rows {
+				out = append(out, r.DNSNames...)
+			}
+			after = rows[len(rows)-1].ID
+		}
+		return out, nil
+	}},
+
+	// ===== gratuitas: DNS passivo e agregadores =====
+	{name: "AlienVault OTX", fn: func(ctx context.Context, c *http.Client, _, t string) ([]string, error) {
+		var out []string
+		var urls struct {
 			URLList []struct {
 				Hostname string `json:"hostname"`
 			} `json:"url_list"`
 		}
-		if err := json.NewDecoder(body).Decode(&r); err != nil {
-			return nil, err
-		}
-		out := make([]string, 0, len(r.URLList))
-		for _, u := range r.URLList {
+		err1 := fetchJSON(ctx, c, fmt.Sprintf("https://otx.alienvault.com/api/v1/indicators/domain/%s/url_list?limit=500", t), nil, &urls)
+		for _, u := range urls.URLList {
 			out = append(out, u.Hostname)
+		}
+		var pdns struct {
+			PassiveDNS []struct {
+				Hostname string `json:"hostname"`
+			} `json:"passive_dns"`
+		}
+		err2 := fetchJSON(ctx, c, fmt.Sprintf("https://otx.alienvault.com/api/v1/indicators/domain/%s/passive_dns", t), nil, &pdns)
+		for _, p := range pdns.PassiveDNS {
+			out = append(out, p.Hostname)
+		}
+		if err1 != nil && err2 != nil {
+			return nil, err1
 		}
 		return out, nil
 	}},
-	{"Wayback CDX", func(ctx context.Context, c *http.Client, t string) ([]string, error) {
+	{name: "URLScan.io", env: "URLSCAN_API_KEY", fn: func(ctx context.Context, c *http.Client, key, t string) ([]string, error) {
+		headers := map[string]string{}
+		if key != "" {
+			headers["API-Key"] = key
+		}
+		u := "https://urlscan.io/api/v1/search/?size=1000&q=" + url.QueryEscape("domain:"+t)
+		var r struct {
+			Results []struct {
+				Page struct {
+					Domain string `json:"domain"`
+				} `json:"page"`
+				Task struct {
+					Domain string `json:"domain"`
+				} `json:"task"`
+			} `json:"results"`
+		}
+		if err := fetchJSON(ctx, c, u, headers, &r); err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, x := range r.Results {
+			out = append(out, x.Page.Domain, x.Task.Domain)
+		}
+		return out, nil
+	}},
+	scrapeSource("RapidDNS", "https://rapiddns.io/subdomain/%s?full=1"),
+	scrapeSource("DNSRepo", "https://dnsrepo.noc.org/?domain=%s"),
+
+	// ===== gratuita: arquivo da web =====
+	{name: "Wayback CDX", fn: func(ctx context.Context, c *http.Client, _, t string) ([]string, error) {
 		q := url.Values{}
 		q.Set("url", "*."+t+"/*")
 		q.Set("collapse", "urlkey")
 		q.Set("output", "text")
 		q.Set("fl", "original")
-		body, err := httpGet(ctx, c, "https://web.archive.org/cdx/search/cdx?"+q.Encode())
+		body, err := open(ctx, c, "https://web.archive.org/cdx/search/cdx?"+q.Encode(), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -160,40 +290,6 @@ var sources = []source{
 		}
 		return out, sc.Err()
 	}},
-	{"crt.sh", func(ctx context.Context, c *http.Client, t string) ([]string, error) {
-		body, err := httpGet(ctx, c, "https://crt.sh/?q=%25."+t+"&output=json")
-		if err != nil {
-			return nil, err
-		}
-		defer body.Close()
-		var rows []struct {
-			NameValue string `json:"name_value"`
-		}
-		if err := json.NewDecoder(body).Decode(&rows); err != nil {
-			return nil, err
-		}
-		var out []string
-		for _, r := range rows {
-			out = append(out, splitLines(r.NameValue)...)
-		}
-		return out, nil
-	}},
-	{"Assetfinder", func(ctx context.Context, _ *http.Client, t string) ([]string, error) {
-		return runCmd(ctx, "assetfinder", "--subs-only", t)
-	}},
-	{"VirusTotal", func(ctx context.Context, c *http.Client, t string) ([]string, error) {
-		body, err := httpGet(ctx, c, fmt.Sprintf("https://www.virustotal.com/ui/domains/%s/subdomains?limit=40", t))
-		if err != nil {
-			return nil, err
-		}
-		defer body.Close()
-		raw, err := io.ReadAll(body)
-		if err != nil {
-			return nil, err
-		}
-		re := regexp.MustCompile(`[a-zA-Z0-9._-]+\.` + regexp.QuoteMeta(t))
-		return re.FindAllString(string(raw), -1), nil
-	}},
 }
 
 // ---------- scan ----------
@@ -208,14 +304,14 @@ func scan(ctx context.Context, c *http.Client, target string) map[string]struct{
 	)
 
 	for _, s := range sources {
+		key := ""
+		if s.env != "" {
+			key = os.Getenv(s.env)
+		}
 		wg.Add(1)
-		go func(s source) {
+		go func(s source, key string) {
 			defer wg.Done()
-			res, err := s.fn(ctx, c, target)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s[!] %s falhou: %v%s\n", yellow, s.name, err, reset)
-				return
-			}
+			res, err := s.fn(ctx, c, key, target)
 			n := 0
 			mu.Lock()
 			for _, h := range res {
@@ -225,11 +321,33 @@ func scan(ctx context.Context, c *http.Client, target string) map[string]struct{
 				}
 			}
 			mu.Unlock()
-			fmt.Fprintf(os.Stderr, "%s[+] %-15s %d hosts%s\n", red, s.name, n, reset)
-		}(s)
+			if err != nil {
+				msg := ""
+				if verbose {
+					msg = ": " + err.Error()
+				}
+				fmt.Fprintf(os.Stderr, "%s[!] %-17s falhou%s (%d hosts)%s\n", yellow, s.name, msg, n, reset)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "%s[+] %-17s %d hosts%s\n", red, s.name, n, reset)
+		}(s, key)
 	}
 	wg.Wait()
 	return found
+}
+
+func listSources() {
+	fmt.Fprintln(os.Stderr, "Fontes:")
+	for _, s := range sources {
+		switch {
+		case s.env == "":
+			fmt.Fprintf(os.Stderr, "  [ok]   %s\n", s.name)
+		case os.Getenv(s.env) == "":
+			fmt.Fprintf(os.Stderr, "  [ok]   %s (sem chave; %s é opcional e aumenta o limite)\n", s.name, s.env)
+		default:
+			fmt.Fprintf(os.Stderr, "  [ok]   %s (usando %s)\n", s.name, s.env)
+		}
+	}
 }
 
 func main() {
@@ -239,11 +357,17 @@ func main() {
 		outFile = flag.String("o", "subdomains.txt", "Arquivo de saída")
 		timeout = flag.Duration("t", 90*time.Second, "Timeout por alvo")
 		quiet   = flag.Bool("silent", false, "Sem banner")
+		ls      = flag.Bool("ls", false, "Lista as fontes")
 	)
+	flag.BoolVar(&verbose, "v", false, "Mostra o motivo das falhas de cada fonte")
 	flag.Parse()
 
 	if !*quiet {
-		fmt.Fprint(os.Stderr, banner)
+		printBanner()
+	}
+	if *ls {
+		listSources()
+		return
 	}
 
 	var targets []string
