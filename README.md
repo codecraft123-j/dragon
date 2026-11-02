@@ -107,6 +107,7 @@ dragon -u example.com -v
 | `-t` | Timeout per target | `90s` |
 | `-silent` | Hide the banner | `false` |
 | `-ls` | List the sources | `false` |
+| `-strict` | Also drop hosts shaped like `ww<N>.<subdomain>.target` (noisy pattern) | `false` |
 | `-v` | Show why each failed source failed | `false` |
 
 Logs and progress go to `stderr`; results go to the output file, so it works in pipelines:
@@ -119,7 +120,7 @@ dragon -u example.com -silent && cat subdomains.txt | httpx -silent
 
 1. Each source runs in parallel (goroutines).
 2. Results are normalized: lowercase, no `*.` prefix, no duplicates.
-3. Only hosts inside the target scope are kept (`target.com` or `*.target.com`).
+3. Only hosts inside the target scope are kept (`target.com` or `*.target.com`). Scraping artifacts are dropped: IP-like fragments (`192.0.2.44www.target.com`), target text glued to other characters (`target.commail.target.com`), and empty or oversized labels.
 4. The final list is sorted and saved to a file.
 5. If a source fails (rate limit, timeout, service down), Dragon prints a warning and continues with the rest.
 

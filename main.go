@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const version = "v1.2.1"
+const version = "v1.2.0"
 
 const (
 	red    = "\033[1;31m"
@@ -80,7 +80,10 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  dragon -u example.com -silent && cat subdomains.txt | httpx -silent\n")
 }
 
-var verbose bool
+var (
+	verbose bool
+	strict  bool
+)
 
 // ---------- helpers ----------
 
@@ -96,6 +99,46 @@ func normalizeTarget(t string) string {
 	return strings.TrimSuffix(t, ".")
 }
 
+var wwN = regexp.MustCompile(`^ww[0-9]+$`)
+
+// glued reports whether the target text appears inside the prefix stuck to
+// other characters (e.g. "exemple.commail"), which is a scraping artifact.
+func glued(prefix, target string) bool {
+	i := 0
+	for i < len(prefix) {
+		j := strings.Index(prefix[i:], target)
+		if j < 0 {
+			return false
+		}
+		start := i + j
+		end := start + len(target)
+		if end < len(prefix) && prefix[end] != '.' {
+			return true
+		}
+		if start > 0 && prefix[start-1] != '.' {
+			return true
+		}
+		i = end
+	}
+	return false
+}
+
+var ipLike = regexp.MustCompile(`[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}`)
+
+// malformed drops clear scraping artifacts: empty or oversized labels,
+// IP-like fragments (a.b.c numbers) and target text glued to other characters.
+func malformed(prefix, target string) bool {
+	if glued(prefix, target) || ipLike.MatchString(prefix) {
+		return true
+	}
+	for _, l := range strings.Split(prefix, ".") {
+		if l == "" || len(l) > 63 {
+			return true
+		}
+	}
+	return false
+}
+
 // cleanHost normalizes and filters: only valid hosts inside the target scope pass.
 func cleanHost(h, target string) (string, bool) {
 	h = strings.ToLower(strings.TrimSpace(h))
@@ -106,8 +149,22 @@ func cleanHost(h, target string) (string, bool) {
 	if h == "" || !strings.Contains(h, ".") || !validHost.MatchString(h) {
 		return "", false
 	}
-	if h != target && !strings.HasSuffix(h, "."+target) {
+	if h == target {
+		return h, true
+	}
+	if !strings.HasSuffix(h, "."+target) {
 		return "", false
+	}
+	prefix := strings.TrimSuffix(h, "."+target)
+	if malformed(prefix, target) {
+		return "", false
+	}
+	// -strict: drop hosts shaped like ww<N>.<something>.target
+	if strict {
+		labels := strings.Split(prefix, ".")
+		if len(labels) > 1 && wwN.MatchString(labels[0]) {
+			return "", false
+		}
 	}
 	return h, true
 }
@@ -396,6 +453,7 @@ func main() {
 		ls      = flag.Bool("ls", false, "List the sources")
 	)
 	flag.BoolVar(&verbose, "v", false, "Show why each failed source failed")
+	flag.BoolVar(&strict, "strict", false, "Also drop hosts shaped like ww<N>.<subdomain>.target (noisy pattern)")
 	flag.Usage = usage
 	flag.Parse()
 
