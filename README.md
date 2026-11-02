@@ -37,15 +37,36 @@ Add the line to `~/.bashrc` or `~/.zshrc` to make it permanent. Never hardcode k
 
 Requires [Go](https://go.dev/dl/).
 
+### Install
+
 ```bash
-go install github.com/codecraft123-j/dragon@latest
+go install github.com/codecraft123-j/dragon@v1.2.0
 ```
 
-The binary is placed in `~/go/bin/dragon`. If that directory is not in your PATH:
+If it fails with `verifying module ... 404 Not Found` (the Go checksum database has not indexed the release yet), fetch it straight from GitHub:
+
+```bash
+GOPROXY=direct GONOSUMDB=github.com/codecraft123-j/dragon go install github.com/codecraft123-j/dragon@v1.2.0
+```
+
+### Alternative: build from source
+
+```bash
+git clone https://github.com/codecraft123-j/dragon.git
+cd dragon
+go install .
+```
+
+The binary is placed in `~/go/bin/dragon`. Check the version with `dragon -ls`; the banner should show `v1.2.0` or newer.
+
+### PATH
+
+If `~/go/bin` is not in your PATH:
 
 ```bash
 echo 'export PATH=$PATH:$HOME/go/bin' >> ~/.bashrc
 source ~/.bashrc
+hash -r
 ```
 
 ### Optional dependencies
