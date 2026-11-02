@@ -1,105 +1,113 @@
 # 🐉 Dragon Scanner
 
-Ferramenta de **enumeração passiva de subdomínios** escrita em Go. Consulta fontes **gratuitas e sem chave obrigatória** em paralelo, filtra pelo escopo do alvo e salva uma lista única e ordenada.
+A **passive subdomain enumeration** tool written in Go. It queries free sources in parallel, filters results to the target's scope, and saves a unique, sorted list. No API key is required.
 
-## Fontes
+## Sources
 
-Todas gratuitas. As marcadas como confirmadas responderam com sucesso em scan real.
+All sources are free. Sources marked *confirmed* returned results in a real scan.
 
-| Fonte | Tipo | Status |
+| Source | Type | Status |
 |---|---|---|
-| crt.sh | Certificate Transparency | confirmada |
-| CertSpotter | Certificate Transparency | confirmada (chave opcional) |
-| AlienVault OTX | URLs + DNS passivo | confirmada |
-| URLScan.io | Páginas escaneadas | confirmada (chave opcional) |
-| RapidDNS | Banco de DNS | confirmada |
-| DNSRepo | Banco de DNS | confirmada |
-| Assetfinder | Ferramenta externa (opcional) | confirmada |
-| Wayback Machine (CDX) | Arquivo da web | em teste |
-| Subfinder | Ferramenta externa (opcional) | em teste |
+| crt.sh | Certificate Transparency | confirmed |
+| CertSpotter | Certificate Transparency | confirmed (optional key) |
+| AlienVault OTX | URLs + passive DNS | confirmed |
+| URLScan.io | Scanned pages | confirmed (optional key) |
+| RapidDNS | DNS database | confirmed |
+| DNSRepo | DNS database | confirmed |
+| Assetfinder | External tool (optional) | confirmed |
+| Wayback Machine (CDX) | Web archive | testing |
+| Subfinder | External tool (optional) | testing |
 
-### Chaves opcionais (funcionam sem, a chave só aumenta o limite)
+### Optional API keys
 
-| Fonte | Variável |
+These sources work without a key; a key only raises the rate limit.
+
+| Source | Variable |
 |---|---|
 | CertSpotter | `CERTSPOTTER_API_KEY` |
 | URLScan.io | `URLSCAN_API_KEY` |
 
-## Instalação
+```bash
+export CERTSPOTTER_API_KEY="your_key"
+```
 
-Requer [Go](https://go.dev/dl/) instalado.
+Add the line to `~/.bashrc` or `~/.zshrc` to make it permanent. Never hardcode keys.
+
+## Installation
+
+Requires [Go](https://go.dev/dl/).
 
 ```bash
 go install github.com/codecraft123-j/dragon@latest
 ```
 
-O binário fica em `~/go/bin/dragon`. Se esse diretório não estiver no PATH:
+The binary is placed in `~/go/bin/dragon`. If that directory is not in your PATH:
 
 ```bash
 echo 'export PATH=$PATH:$HOME/go/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### Dependências opcionais
+### Optional dependencies
 
-`subfinder` e `assetfinder` precisam estar no PATH para serem usados. Se não estiverem, o Dragon avisa e continua com as outras fontes.
+`subfinder` and `assetfinder` must be in your PATH to be used. If they are missing, Dragon reports it and continues with the other sources.
 
 ```bash
 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 go install github.com/tomnomnom/assetfinder@latest
 ```
 
-## Uso
+## Usage
 
 ```bash
-# Alvo único
+# Single target
 dragon -u example.com
 
-# Lista de alvos
-dragon -l alvos.txt
+# List of targets
+dragon -l targets.txt
 
-# Saída personalizada, timeout maior e sem banner
-dragon -u example.com -o resultado.txt -t 300s -silent
+# Custom output file, longer timeout, no banner
+dragon -u example.com -o result.txt -t 300s -silent
 
-# Listar as fontes
+# List the sources
 dragon -ls
 
-# Mostrar o motivo das falhas
+# Show why a source failed
 dragon -u example.com -v
 ```
 
 ### Flags
 
-| Flag | Descrição | Padrão |
+| Flag | Description | Default |
 |---|---|---|
-| `-u` | Alvo único (ex: `example.com`) | — |
-| `-l` | Arquivo com lista de alvos, um por linha | — |
-| `-o` | Arquivo de saída | `subdomains.txt` |
-| `-t` | Timeout por alvo | `90s` |
-| `-silent` | Não exibe o banner | `false` |
-| `-ls` | Lista as fontes | `false` |
-| `-v` | Mostra o motivo das falhas de cada fonte | `false` |
+| `-u` | Single target (e.g. `example.com`) | — |
+| `-l` | File with targets, one per line | — |
+| `-o` | Output file | `subdomains.txt` |
+| `-t` | Timeout per target | `90s` |
+| `-silent` | Hide the banner | `false` |
+| `-ls` | List the sources | `false` |
+| `-v` | Show why each failed source failed | `false` |
 
-Logs e progresso vão para o `stderr`; os resultados vão para o arquivo de saída, então dá para usar em pipeline:
+Logs and progress go to `stderr`; results go to the output file, so it works in pipelines:
 
 ```bash
 dragon -u example.com -silent && cat subdomains.txt | httpx -silent
 ```
 
-## Como funciona
+## How it works
 
-1. Cada fonte roda em paralelo (goroutines).
-2. Os resultados são normalizados: minúsculas, sem `*.`, sem duplicados.
-3. Só ficam os hosts que pertencem ao alvo (`alvo.com` ou `*.alvo.com`).
-4. A lista final é ordenada e salva em arquivo.
-5. Se uma fonte falhar, o Dragon mostra o aviso e continua com as outras.
+1. Each source runs in parallel (goroutines).
+2. Results are normalized: lowercase, no `*.` prefix, no duplicates.
+3. Only hosts inside the target scope are kept (`target.com` or `*.target.com`).
+4. The final list is sorted and saved to a file.
+5. If a source fails (rate limit, timeout, service down), Dragon prints a warning and continues with the rest.
 
-Fontes gratuitas mudam ou saem do ar com o tempo. Use `-v` para ver quais estão falhando.
+Free sources change or go offline over time. Use `-v` to see which ones are failing.
 
-## Aviso legal
+## Legal notice
 
-Use apenas em alvos que você tem **autorização** para testar, como programas de bug bounty dentro do escopo ou ativos próprios. O autor não se responsabiliza pelo uso indevido da ferramenta.
+Use only against targets you are **authorized** to test, such as in-scope bug bounty programs or your own assets. The author is not responsible for misuse of this tool.
 
-## Autor
+## Author
 
 **laftman** — [@codecraft123-j](https://github.com/codecraft123-j)

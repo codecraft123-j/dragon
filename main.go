@@ -18,6 +18,8 @@ import (
 	"time"
 )
 
+const version = "v1.2.0"
+
 const (
 	red    = "\033[1;31m"
 	blue   = "\033[1;34m"
@@ -27,21 +29,55 @@ const (
 	reset  = "\033[0m"
 )
 
-// printBanner desenha o banner com degradê de fogo (vermelho → amarelo).
+// printBanner draws the banner with a fire gradient (red -> yellow)
+// and a cyan frame around the tagline.
 func printBanner() {
 	art := []string{
-		`   ____  ____  ___    ____________  _   __`,
-		`  / __ \/ __ \/   |  / ____/ __ \/ | / /`,
-		` / / / / /_/ / /| | / / __/ / / /  |/ /`,
-		`/ /_/ / _, _/ ___ |/ /_/ / /_/ / /|  /`,
-		`\____/_/ |_/_/  |_|\____/\____/_/ |_/`,
+		`██████╗ ██████╗  █████╗  ██████╗  ██████╗ ███╗   ██╗`,
+		`██╔══██╗██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗████╗  ██║`,
+		`██║  ██║██████╔╝███████║██║  ███╗██║   ██║██╔██╗ ██║`,
+		`██║  ██║██╔══██╗██╔══██║██║   ██║██║   ██║██║╚██╗██║`,
+		`██████╔╝██║  ██║██║  ██║╚██████╔╝╚██████╔╝██║ ╚████║`,
+		`╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝`,
 	}
-	fire := []int{196, 202, 208, 214, 220}
+	fire := []int{196, 202, 208, 214, 220, 226}
+	const (
+		cyan   = "\033[1;38;5;51m"
+		orange = "\033[1;38;5;208m"
+		white  = "\033[1;38;5;255m"
+		dim    = "\033[0;38;5;245m"
+	)
+	rule := strings.Repeat("─", 52)
+
 	fmt.Fprintln(os.Stderr)
-	for i, line := range art {
-		fmt.Fprintf(os.Stderr, "\033[1;38;5;%dm%s%s\n", fire[i], line, reset)
+	// letters (█) use the bright fire color; the box-drawing shadow uses a darker shade
+	shade := []int{52, 88, 94, 130, 136, 172}
+	for i, l := range art {
+		var sb strings.Builder
+		sb.WriteString("  ")
+		for _, r := range l {
+			if r == '█' {
+				fmt.Fprintf(&sb, "\033[1;38;5;%dm%c", fire[i], r)
+			} else {
+				fmt.Fprintf(&sb, "\033[0;38;5;%dm%c", shade[i], r)
+			}
+		}
+		sb.WriteString(reset)
+		fmt.Fprintln(os.Stderr, sb.String())
 	}
-	fmt.Fprintf(os.Stderr, "\033[1;38;5;51m   ⚡ Passive Subdomain Hunter %s•\033[1;38;5;51m v1.1.1 %s•\033[1;38;5;51m by laftman%s\n\n", gray, gray, reset)
+	fmt.Fprintf(os.Stderr, "  %s%s%s\n", cyan, rule, reset)
+	fmt.Fprintf(os.Stderr, "   %s⚡ %sPassive Subdomain Hunter %s•%s %s %s•%s by %slaftman%s\n",
+		orange, white, dim, cyan, version, dim, white, orange, reset)
+	fmt.Fprintf(os.Stderr, "  %s%s%s\n\n", cyan, rule, reset)
+}
+
+func usage() {
+	fmt.Fprintf(os.Stderr, "Usage:\n  dragon -u <domain> [options]\n  dragon -l <file>   [options]\n\nOptions:\n")
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "\nExamples:\n")
+	fmt.Fprintf(os.Stderr, "  dragon -u example.com\n")
+	fmt.Fprintf(os.Stderr, "  dragon -l targets.txt -o out.txt -t 180s\n")
+	fmt.Fprintf(os.Stderr, "  dragon -u example.com -silent && cat subdomains.txt | httpx -silent\n")
 }
 
 var verbose bool
@@ -60,7 +96,7 @@ func normalizeTarget(t string) string {
 	return strings.TrimSuffix(t, ".")
 }
 
-// cleanHost normaliza e filtra: só aceita host válido dentro do escopo do alvo.
+// cleanHost normalizes and filters: only valid hosts inside the target scope pass.
 func cleanHost(h, target string) (string, bool) {
 	h = strings.ToLower(strings.TrimSpace(h))
 	h = strings.TrimSuffix(h, ".")
@@ -88,7 +124,7 @@ func splitLines(s string) []string {
 
 func runCmd(ctx context.Context, name string, args ...string) ([]string, error) {
 	if _, err := exec.LookPath(name); err != nil {
-		return nil, fmt.Errorf("%s não encontrado no PATH", name)
+		return nil, fmt.Errorf("%s not found in PATH", name)
 	}
 	out, err := exec.CommandContext(ctx, name, args...).Output()
 	if err != nil && len(out) == 0 {
@@ -102,7 +138,7 @@ func open(ctx context.Context, c *http.Client, u string, headers map[string]stri
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) dragon/1.1")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) dragon/1.2")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -134,15 +170,15 @@ func fetchJSON(ctx context.Context, c *http.Client, u string, headers map[string
 	return json.Unmarshal(b, v)
 }
 
-// ---------- fontes ----------
+// ---------- sources ----------
 
 type source struct {
 	name string
-	env  string // variável de ambiente com a chave de API opcional (vazio = não usa chave)
+	env  string // optional API key environment variable (empty = no key used)
 	fn   func(ctx context.Context, c *http.Client, key, target string) ([]string, error)
 }
 
-// scrapeSource cria uma fonte que baixa uma página e extrai hosts por regex.
+// scrapeSource builds a source that downloads a page and extracts hosts by regex.
 func scrapeSource(name, format string) source {
 	return source{name: name, fn: func(ctx context.Context, c *http.Client, _, t string) ([]string, error) {
 		b, err := fetch(ctx, c, fmt.Sprintf(format, t), nil)
@@ -155,7 +191,7 @@ func scrapeSource(name, format string) source {
 }
 
 var sources = []source{
-	// ===== ferramentas externas (opcionais) =====
+	// ===== external tools (optional) =====
 	{name: "Subfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
 		return runCmd(ctx, "subfinder", "-d", t, "-silent")
 	}},
@@ -163,7 +199,7 @@ var sources = []source{
 		return runCmd(ctx, "assetfinder", "--subs-only", t)
 	}},
 
-	// ===== gratuitas: Certificate Transparency =====
+	// ===== free: Certificate Transparency =====
 	{name: "crt.sh", fn: func(ctx context.Context, c *http.Client, _, t string) ([]string, error) {
 		var rows []struct {
 			NameValue string `json:"name_value"`
@@ -208,7 +244,7 @@ var sources = []source{
 		return out, nil
 	}},
 
-	// ===== gratuitas: DNS passivo e agregadores =====
+	// ===== free: passive DNS and aggregators =====
 	{name: "AlienVault OTX", fn: func(ctx context.Context, c *http.Client, _, t string) ([]string, error) {
 		var out []string
 		var urls struct {
@@ -262,7 +298,7 @@ var sources = []source{
 	scrapeSource("RapidDNS", "https://rapiddns.io/subdomain/%s?full=1"),
 	scrapeSource("DNSRepo", "https://dnsrepo.noc.org/?domain=%s"),
 
-	// ===== gratuita: arquivo da web =====
+	// ===== free: web archive =====
 	{name: "Wayback CDX", fn: func(ctx context.Context, c *http.Client, _, t string) ([]string, error) {
 		q := url.Values{}
 		q.Set("url", "*."+t+"/*")
@@ -295,7 +331,7 @@ var sources = []source{
 // ---------- scan ----------
 
 func scan(ctx context.Context, c *http.Client, target string) map[string]struct{} {
-	fmt.Fprintf(os.Stderr, "%s[*] O Dragão está sobrevoando: %s%s\n", blue, target, reset)
+	fmt.Fprintf(os.Stderr, "%s[*] The Dragon is flying over: %s%s\n", blue, target, reset)
 
 	var (
 		mu    sync.Mutex
@@ -326,7 +362,7 @@ func scan(ctx context.Context, c *http.Client, target string) map[string]struct{
 				if verbose {
 					msg = ": " + err.Error()
 				}
-				fmt.Fprintf(os.Stderr, "%s[!] %-17s falhou%s (%d hosts)%s\n", yellow, s.name, msg, n, reset)
+				fmt.Fprintf(os.Stderr, "%s[!] %-17s failed%s (%d hosts)%s\n", yellow, s.name, msg, n, reset)
 				return
 			}
 			fmt.Fprintf(os.Stderr, "%s[+] %-17s %d hosts%s\n", red, s.name, n, reset)
@@ -337,29 +373,30 @@ func scan(ctx context.Context, c *http.Client, target string) map[string]struct{
 }
 
 func listSources() {
-	fmt.Fprintln(os.Stderr, "Fontes:")
+	fmt.Fprintln(os.Stderr, "Sources:")
 	for _, s := range sources {
 		switch {
 		case s.env == "":
-			fmt.Fprintf(os.Stderr, "  [ok]   %s\n", s.name)
+			fmt.Fprintf(os.Stderr, "  [ok] %s\n", s.name)
 		case os.Getenv(s.env) == "":
-			fmt.Fprintf(os.Stderr, "  [ok]   %s (sem chave; %s é opcional e aumenta o limite)\n", s.name, s.env)
+			fmt.Fprintf(os.Stderr, "  [ok] %s (no key; %s is optional and raises the rate limit)\n", s.name, s.env)
 		default:
-			fmt.Fprintf(os.Stderr, "  [ok]   %s (usando %s)\n", s.name, s.env)
+			fmt.Fprintf(os.Stderr, "  [ok] %s (using %s)\n", s.name, s.env)
 		}
 	}
 }
 
 func main() {
 	var (
-		single  = flag.String("u", "", "Alvo único (ex: example.com)")
-		list    = flag.String("l", "", "Arquivo com lista de alvos")
-		outFile = flag.String("o", "subdomains.txt", "Arquivo de saída")
-		timeout = flag.Duration("t", 90*time.Second, "Timeout por alvo")
-		quiet   = flag.Bool("silent", false, "Sem banner")
-		ls      = flag.Bool("ls", false, "Lista as fontes")
+		single  = flag.String("u", "", "Single target (e.g. example.com)")
+		list    = flag.String("l", "", "File with a list of targets, one per line")
+		outFile = flag.String("o", "subdomains.txt", "Output file")
+		timeout = flag.Duration("t", 90*time.Second, "Timeout per target")
+		quiet   = flag.Bool("silent", false, "Hide the banner")
+		ls      = flag.Bool("ls", false, "List the sources")
 	)
-	flag.BoolVar(&verbose, "v", false, "Mostra o motivo das falhas de cada fonte")
+	flag.BoolVar(&verbose, "v", false, "Show why each failed source failed")
+	flag.Usage = usage
 	flag.Parse()
 
 	if !*quiet {
@@ -377,7 +414,7 @@ func main() {
 	case *list != "":
 		f, err := os.Open(*list)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s[!] Erro: %v%s\n", red, err, reset)
+			fmt.Fprintf(os.Stderr, "%s[!] Error: %v%s\n", red, err, reset)
 			os.Exit(1)
 		}
 		defer f.Close()
@@ -411,7 +448,7 @@ func main() {
 
 	f, err := os.Create(*outFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s[!] Erro ao salvar: %v%s\n", red, err, reset)
+		fmt.Fprintf(os.Stderr, "%s[!] Could not save results: %v%s\n", red, err, reset)
 		os.Exit(1)
 	}
 	defer f.Close()
@@ -422,8 +459,8 @@ func main() {
 	w.Flush()
 
 	fmt.Fprintf(os.Stderr, "\n%s=======================================%s\n", green, reset)
-	fmt.Fprintf(os.Stderr, "%s[+] O DRAGÃO FINALIZOU A CAÇADA!%s\n", green, reset)
-	fmt.Fprintf(os.Stderr, "%s[+] %d Subdomínios únicos encontrados.%s\n", green, len(sorted), reset)
-	fmt.Fprintf(os.Stderr, "%s[+] Resultados em: %s%s\n", green, *outFile, reset)
+	fmt.Fprintf(os.Stderr, "%s[+] THE DRAGON FINISHED THE HUNT!%s\n", green, reset)
+	fmt.Fprintf(os.Stderr, "%s[+] %d unique subdomains found.%s\n", green, len(sorted), reset)
+	fmt.Fprintf(os.Stderr, "%s[+] Results saved to: %s%s\n", green, *outFile, reset)
 	fmt.Fprintf(os.Stderr, "%s=======================================%s\n", green, reset)
 }
