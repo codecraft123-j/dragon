@@ -40,13 +40,13 @@ Requires [Go](https://go.dev/dl/).
 ### Install
 
 ```bash
-go install github.com/codecraft123-j/dragon@v1.2.0
+go install github.com/codecraft123-j/dragon@v1.2.1
 ```
 
 If it fails with `verifying module ... 404 Not Found` (the Go checksum database has not indexed the release yet), fetch it straight from GitHub:
 
 ```bash
-GOPROXY=direct GONOSUMDB=github.com/codecraft123-j/dragon go install github.com/codecraft123-j/dragon@v1.2.0
+GOPROXY=direct GONOSUMDB=github.com/codecraft123-j/dragon go install github.com/codecraft123-j/dragon@v1.2.1
 ```
 
 ### Alternative: build from source
