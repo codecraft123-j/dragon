@@ -71,7 +71,7 @@ hash -r
 
 ### Optional dependencies
 
-`subfinder` and `assetfinder` must be in your PATH to be used. If they are missing, Dragon reports it and continues with the other sources.
+`subfinder` and `assetfinder` are searched in your PATH and in `~/go/bin`. If they are missing, Dragon reports it and continues with the other sources.
 
 ```bash
 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
@@ -95,6 +95,9 @@ dragon -ls
 
 # Show why a source failed
 dragon -u example.com -v
+
+# Give subfinder more time
+dragon -u example.com -tt 10m -v
 ```
 
 ### Flags
@@ -105,6 +108,7 @@ dragon -u example.com -v
 | `-l` | File with targets, one per line | — |
 | `-o` | Output file | `subdomains.txt` |
 | `-t` | Timeout per source (HTTP sources) | `90s` |
+| `-tt` | Timeout for external tools (subfinder, assetfinder) | `5m` |
 | `-silent` | Hide the banner | `false` |
 | `-ls` | List the sources | `false` |
 | `-strict` | Also drop hosts shaped like `ww<N>.<subdomain>.target` (noisy pattern) | `false` |
