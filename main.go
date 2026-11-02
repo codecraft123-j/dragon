@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,7 +20,7 @@ import (
 	"time"
 )
 
-const version = "v1.2.2"
+const version = "v1.2.3"
 
 const (
 	red    = "\033[1;31m"
@@ -77,12 +79,14 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "\nExamples:\n")
 	fmt.Fprintf(os.Stderr, "  dragon -u example.com\n")
 	fmt.Fprintf(os.Stderr, "  dragon -l targets.txt -o out.txt -t 180s\n")
+	fmt.Fprintf(os.Stderr, "  dragon -u example.com -tt 10m -v\n")
 	fmt.Fprintf(os.Stderr, "  dragon -u example.com -silent && cat subdomains.txt | httpx -silent\n")
 }
 
 var (
-	verbose bool
-	strict  bool
+	verbose     bool
+	strict      bool
+	toolTimeout = 5 * time.Minute // timeout for external tools (subfinder, assetfinder)
 )
 
 // ---------- helpers ----------
@@ -179,17 +183,62 @@ func splitLines(s string) []string {
 	return out
 }
 
-func runCmd(ctx context.Context, name string, args ...string) ([]string, error) {
-	if _, err := exec.LookPath(name); err != nil {
-		return nil, fmt.Errorf("%s not found in PATH", name)
+// findBin looks for a binary in PATH and, failing that, in the usual
+// install locations (go install puts tools in ~/go/bin, which is often
+// missing from PATH).
+func findBin(name string) (string, error) {
+	if p, err := exec.LookPath(name); err == nil {
+		return p, nil
 	}
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stderr = nil // Descarta o stderr igual ao subprocess.DEVNULL do Python
-	out, err := cmd.Output()
-	if err != nil && len(out) == 0 {
+	var dirs []string
+	if gp := os.Getenv("GOPATH"); gp != "" {
+		dirs = append(dirs, filepath.Join(gp, "bin"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "go", "bin"), filepath.Join(home, ".local", "bin"))
+	}
+	dirs = append(dirs, "/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/snap/bin")
+	for _, d := range dirs {
+		p := filepath.Join(d, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%s not found in PATH (or ~/go/bin)", name)
+}
+
+// runCmd runs an external tool and returns its stdout lines. Partial output
+// is kept even if the tool is killed by the timeout.
+func runCmd(ctx context.Context, name string, args ...string) ([]string, error) {
+	bin, err := findBin(name)
+	if err != nil {
 		return nil, err
 	}
-	return splitLines(string(out)), nil
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = 3 * time.Second
+	runErr := cmd.Run()
+
+	lines := splitLines(stdout.String())
+	if len(lines) > 0 {
+		return lines, nil
+	}
+	if runErr != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%s timed out with no output (raise -tt)", name)
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if len(msg) > 200 {
+			msg = msg[len(msg)-200:]
+		}
+		if msg != "" {
+			return nil, fmt.Errorf("%s: %v: %s", name, runErr, msg)
+		}
+		return nil, fmt.Errorf("%s: %v", name, runErr)
+	}
+	return lines, nil
 }
 
 func open(ctx context.Context, c *http.Client, u string, headers map[string]string) (io.ReadCloser, error) {
@@ -250,6 +299,7 @@ func fetchJSON(ctx context.Context, c *http.Client, u string, headers map[string
 type source struct {
 	name string
 	env  string // optional API key environment variable (empty = no key used)
+	tool bool   // external tool: uses the longer tool timeout (-tt)
 	fn   func(ctx context.Context, c *http.Client, key, target string) ([]string, error)
 }
 
@@ -265,12 +315,22 @@ func scrapeSource(name, format string) source {
 	}}
 }
 
+// subfinderMaxTime converts the tool timeout to minutes for subfinder's
+// -max-time flag, so it stops gracefully (and prints what it has) before we kill it.
+func subfinderMaxTime() string {
+	m := int(toolTimeout/time.Minute) - 1
+	if m < 1 {
+		m = 1
+	}
+	return fmt.Sprint(m)
+}
+
 var sources = []source{
 	// ===== external tools (optional) =====
-	{name: "Subfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
-		return runCmd(ctx, "subfinder", "-d", t, "-silent")
+	{name: "Subfinder", tool: true, fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
+		return runCmd(ctx, "subfinder", "-d", t, "-silent", "-timeout", "30", "-max-time", subfinderMaxTime())
 	}},
-	{name: "Assetfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
+	{name: "Assetfinder", tool: true, fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
 		return runCmd(ctx, "assetfinder", "--subs-only", t)
 	}},
 
@@ -408,7 +468,7 @@ var sources = []source{
 
 // ---------- scan ----------
 
-func scan(ctx context.Context, c *http.Client, target string) map[string]struct{} {
+func scan(c *http.Client, target string, timeout time.Duration) map[string]struct{} {
 	fmt.Fprintf(os.Stderr, "%s[*] The Dragon is flying over: %s%s\n", blue, target, reset)
 
 	var (
@@ -425,6 +485,15 @@ func scan(ctx context.Context, c *http.Client, target string) map[string]struct{
 		wg.Add(1)
 		go func(s source, key string) {
 			defer wg.Done()
+			// each source gets its own deadline: external tools need more time
+			// than a plain HTTP request.
+			d := timeout
+			if s.tool {
+				d = toolTimeout
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), d)
+			defer cancel()
+
 			res, err := s.fn(ctx, c, key, target)
 			n := 0
 			mu.Lock()
@@ -454,6 +523,12 @@ func listSources() {
 	fmt.Fprintln(os.Stderr, "Sources:")
 	for _, s := range sources {
 		switch {
+		case s.tool:
+			if p, err := findBin(strings.ToLower(s.name)); err == nil {
+				fmt.Fprintf(os.Stderr, "  [ok] %s (%s)\n", s.name, p)
+			} else {
+				fmt.Fprintf(os.Stderr, "  [--] %s (not installed)\n", s.name)
+			}
 		case s.env == "":
 			fmt.Fprintf(os.Stderr, "  [ok] %s\n", s.name)
 		case os.Getenv(s.env) == "":
@@ -469,10 +544,11 @@ func main() {
 		single  = flag.String("u", "", "Single target (e.g. example.com)")
 		list    = flag.String("l", "", "File with a list of targets, one per line")
 		outFile = flag.String("o", "subdomains.txt", "Output file")
-		timeout = flag.Duration("t", 90*time.Second, "Timeout per target")
+		timeout = flag.Duration("t", 90*time.Second, "Timeout per source (HTTP sources)")
 		quiet   = flag.Bool("silent", false, "Hide the banner")
 		ls      = flag.Bool("ls", false, "List the sources")
 	)
+	flag.DurationVar(&toolTimeout, "tt", 5*time.Minute, "Timeout for external tools (subfinder, assetfinder)")
 	flag.BoolVar(&verbose, "v", false, "Show why each failed source failed")
 	flag.BoolVar(&strict, "strict", false, "Also drop hosts shaped like ww<N>.<subdomain>.target (noisy pattern)")
 	flag.Usage = usage
@@ -508,15 +584,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	client := &http.Client{Timeout: *timeout}
+	// no global client timeout: each request is bounded by its source context
+	client := &http.Client{}
 	all := map[string]struct{}{}
 
 	for _, t := range targets {
-		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-		for h := range scan(ctx, client, t) {
+		for h := range scan(client, t, *timeout) {
 			all[h] = struct{}{}
 		}
-		cancel()
 	}
 
 	sorted := make([]string, 0, len(all))
