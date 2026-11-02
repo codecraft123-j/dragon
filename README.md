@@ -40,13 +40,13 @@ Requires [Go](https://go.dev/dl/).
 ### Install
 
 ```bash
-go install github.com/codecraft123-j/dragon@v1.2.2
+go install github.com/codecraft123-j/dragon@v1.2.3
 ```
 
 If it fails with `verifying module ... 404 Not Found` (the Go checksum database has not indexed the release yet), fetch it straight from GitHub:
 
 ```bash
-GOPROXY=direct GONOSUMDB=github.com/codecraft123-j/dragon go install github.com/codecraft123-j/dragon@v1.2.2
+GOPROXY=direct GONOSUMDB=github.com/codecraft123-j/dragon go install github.com/codecraft123-j/dragon@v1.2.3
 ```
 
 ### Alternative: build from source
@@ -104,7 +104,7 @@ dragon -u example.com -v
 | `-u` | Single target (e.g. `example.com`) | — |
 | `-l` | File with targets, one per line | — |
 | `-o` | Output file | `subdomains.txt` |
-| `-t` | Timeout per target | `90s` |
+| `-t` | Timeout per source (HTTP sources) | `90s` |
 | `-silent` | Hide the banner | `false` |
 | `-ls` | List the sources | `false` |
 | `-strict` | Also drop hosts shaped like `ww<N>.<subdomain>.target` (noisy pattern) | `false` |
