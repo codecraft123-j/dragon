@@ -183,7 +183,9 @@ func runCmd(ctx context.Context, name string, args ...string) ([]string, error) 
 	if _, err := exec.LookPath(name); err != nil {
 		return nil, fmt.Errorf("%s not found in PATH", name)
 	}
-	out, err := exec.CommandContext(ctx, name, args...).Output()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stderr = nil // Descarta o stderr igual ao subprocess.DEVNULL do Python
+	out, err := cmd.Output()
 	if err != nil && len(out) == 0 {
 		return nil, err
 	}
@@ -266,15 +268,7 @@ func scrapeSource(name, format string) source {
 var sources = []source{
 	// ===== external tools (optional) =====
 	{name: "Subfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
-		// -max-time is in minutes; keep it inside Dragon's per-target timeout
-		// so Subfinder exits on its own and prints what it found.
-		mins := 1
-		if dl, ok := ctx.Deadline(); ok {
-			if m := int((time.Until(dl) - 10*time.Second) / time.Minute); m > mins {
-				mins = m
-			}
-		}
-		return runCmd(ctx, "subfinder", "-d", t, "-silent", "-max-time", fmt.Sprint(mins))
+		return runCmd(ctx, "subfinder", "-d", t, "-silent")
 	}},
 	{name: "Assetfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
 		return runCmd(ctx, "assetfinder", "--subs-only", t)
