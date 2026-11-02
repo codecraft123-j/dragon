@@ -191,23 +191,39 @@ func runCmd(ctx context.Context, name string, args ...string) ([]string, error) 
 }
 
 func open(ctx context.Context, c *http.Client, u string, headers map[string]string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) dragon/1.2")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 { // transient server errors: wait 2s, then 4s
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) dragon/1.2")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusOK {
+			return resp.Body, nil
+		}
 		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			continue
+		}
+		break
 	}
-	return resp.Body, nil
+	return nil, lastErr
 }
 
 func fetch(ctx context.Context, c *http.Client, u string, headers map[string]string) ([]byte, error) {
@@ -250,7 +266,15 @@ func scrapeSource(name, format string) source {
 var sources = []source{
 	// ===== external tools (optional) =====
 	{name: "Subfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
-		return runCmd(ctx, "subfinder", "-d", t, "-silent")
+		// -max-time is in minutes; keep it inside Dragon's per-target timeout
+		// so Subfinder exits on its own and prints what it found.
+		mins := 1
+		if dl, ok := ctx.Deadline(); ok {
+			if m := int((time.Until(dl) - 10*time.Second) / time.Minute); m > mins {
+				mins = m
+			}
+		}
+		return runCmd(ctx, "subfinder", "-d", t, "-silent", "-max-time", fmt.Sprint(mins))
 	}},
 	{name: "Assetfinder", fn: func(ctx context.Context, _ *http.Client, _, t string) ([]string, error) {
 		return runCmd(ctx, "assetfinder", "--subs-only", t)
@@ -288,6 +312,9 @@ var sources = []source{
 				DNSNames []string `json:"dns_names"`
 			}
 			if err := fetchJSON(ctx, c, u, headers, &rows); err != nil {
+				if key == "" && strings.Contains(err.Error(), "429") {
+					err = fmt.Errorf("%w (rate limited; set CERTSPOTTER_API_KEY)", err)
+				}
 				return out, err
 			}
 			if len(rows) == 0 {
