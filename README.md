@@ -16,7 +16,7 @@ All sources are free. Sources marked *confirmed* returned results in a real scan
 | DNSRepo | DNS database | confirmed |
 | Assetfinder | External tool (optional) | confirmed |
 | Wayback Machine (CDX) | Web archive | testing |
-| Subfinder | External tool (optional) | testing |
+| Subfinder | External tool (optional) | confirmed |
 
 ### Optional API keys
 
