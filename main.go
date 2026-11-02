@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const version = "v1.2.1"
+const version = "v1.2.2"
 
 const (
 	red    = "\033[1;31m"
